@@ -1,1 +1,10 @@
 streamlit
+langchain
+langchain-community
+langchain-core
+langchainhub
+chromadb
+sentence-transformers
+transformers
+openai
+python-dotenv
