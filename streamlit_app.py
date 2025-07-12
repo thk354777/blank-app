@@ -13,7 +13,7 @@ from langchain import hub
 from openai import OpenAI
 import time
 from langchain.chains.combine_documents import create_stuff_documents_chain
-# import chromadb
+import chromadb
 # from chromadb.config import Settings
 # from langchain_community.vectorstores import Chroma
 # from langchain.chat_models import ChatOpenAI #comment?
