@@ -1,9 +1,7 @@
 import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-# from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
 from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores import Chroma
 from langchain.schema import Document
@@ -32,20 +30,30 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 
 from dotenv import load_dotenv
 import os
-import shutil
-import os
+
 from sentence_transformers import SentenceTransformer
 import torch
 from transformers import AutoTokenizer
+import pysqlite3 as sqlite3
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 # torch.cuda.empty_cache()
 
 load_dotenv()
 # typhoon_api_key = os.getenv("TYPHOON_API_KEY")
 # os.environ["TYPHOON_API_KEY"] = os.getenv("TYPHOON_API_KEY")
-TYPHOON_API_KEY=os.getenv("TYPHOON_API_KEY")
-os.environ["OPENAI_API_KEY"] = TYPHOON_API_KEY
-os.environ["OPENAI_API_BASE"] = "https://api.opentyphoon.ai/v1"
+# TYPHOON_API_KEY=os.getenv("TYPHOON_API_KEY")
+# os.environ["OPENAI_API_KEY"] = TYPHOON_API_KEY
+# os.environ["OPENAI_API_BASE"] = "https://api.opentyphoon.ai/v1"
 
+# TYPHOON_API_KEY = os.environ.get("TYPHOON_API_KEY")
+# os.environ["OPENAI_API_KEY"] = os.environ.get("TYPHOON_API_KEY")
+# ty = st.secrets["TYPHOON_API_KEY"]
+st.secrets.key = 'TYPHOON_API_KEY'
+ty = st.secrets.key
+# os.environ["OPENAI_API_KEY"] = st.secrets["TYPHOON_API_KEY"]
+# os.environ["OPENAI_API_BASE"] = "https://api.opentyphoon.ai/v1"
 doc = [
   {
     "disease": "ไข้หวัดใหญ่",
@@ -203,41 +211,85 @@ doc.extend(doc_extra)
 documents = [Document(page_content=d["symptoms"][0], metadata={"disease": d["disease"]}) for d in doc]
 
 model_path = "Snowflake/snowflake-arctic-embed-l-v2.0"
+
 embeddings = HuggingFaceEmbeddings(
     model_name=model_path,
     model_kwargs={"device": "cpu"}
 )
 
-persist_directory = 'docs/chroma1/'
 
-if os.path.exists(persist_directory):
-    import gc, time
-    gc.collect()
-    time.sleep(0.2)
+import shutil
+import os
+import stat
+import gc
+import datetime
+
+# ------------ Configuration ------------
+base_directory = 'docs/chroma4'
+collection_name = "my_collection13"
+
+# ------------ Safe Delete Handler ------------
+def on_rm_error(func, path, exc_info):
+    # fallback ถ้าไฟล์ถูกล็อกโดย OS (Windows)
+    import stat
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+def safe_reset_chroma(base_directory, collection_name, vectordb=None):
+    # ปิด vectordb (ถ้ามี)
+    if vectordb:
+        vectordb._collection = None
+        vectordb = None
+        gc.collect()
+        time.sleep(1)
+
+    # ลบ collection เดิม (ถ้ามี)
+    client = chromadb.Client()
     try:
-        shutil.rmtree(persist_directory)
+        client.delete_collection(collection_name)
+        print(f"✅ Deleted Chroma collection: {collection_name}")
     except Exception as e:
-        print(f"⚠️ Unable to delete directory: {e}")
+        print(f"ℹ️ Skipped collection deletion (maybe not exists): {e}")
 
-client = chromadb.Client()
-# collection = client.create_collection(name="my_collection5", metadata={"hnsw:space": "cosine"})
-collection = client.get_or_create_collection(
-    name="my_collection6",
+    # สร้างโฟลเดอร์ใหม่ตาม timestamp
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    new_persist_directory = os.path.join(base_directory, f"chroma_{now}")
+    os.makedirs(new_persist_directory, exist_ok=True)
+    print(f"📁 Created new persist directory: {new_persist_directory}")
+
+    # รอระบบเคลียร์หน่วยความจำ
+    gc.collect()
+    time.sleep(1)
+
+    # return client และ path ใหม่
+    return client, new_persist_directory
+
+# ------------ เรียกใช้ฟังก์ชัน ------------
+# safe_reset_chroma(persist_directory, collection_name)
+# shutil.rmtree(persist_directory, ignore_errors=True)
+# shutil.rmtree(persist_directory, onerror=on_rm_error)
+
+# ------------ สร้าง client และ collection ใหม่ ------------
+# client = chromadb.Client()
+# client = safe_reset_chroma(persist_directory, collection_name)
+client, persist_directory = safe_reset_chroma(base_directory, collection_name)
+collection = client.create_collection(
+    name=collection_name,
     metadata={"hnsw:space": "cosine"}
 )
 
 vectordb = Chroma.from_documents(
     documents=documents,
-    collection_name="my_collection6",
+    collection_name=collection_name,
     embedding=embeddings,
     persist_directory=persist_directory
 )
 
 llm = ChatOpenAI(
-    model_name="typhoon-v2-70b-instruct",
-    temperature=0.6,
+    model_name="typhoon-v2-70b-instruct", #"typhoon-v2.1-12b-instruct", "typhoon-v2-70b-instruct"
+    temperature=0.9,
     max_tokens=512, # Total Context Window 8k เป็น token input + token output แล้ว
-    openai_api_key=TYPHOON_API_KEY,
+    openai_api_key="sk-cB5S8H0J5o0QBid2QmJ73GjQJAfF0EN3Rm8AgoYJkZLZsUG2",
     openai_api_base="https://api.opentyphoon.ai/v1",
 )
 
@@ -247,38 +299,48 @@ conversaton_sum = ConversationChain(
 )
 
 template = """
-คุณเป็นผู้ช่วยแพทย์ AI ใช้บริบทต่อไปนี้เพื่อตอบคำถามของผู้ใช้เกี่ยวกับอาการเจ็บป่วย โดยประเมินความเป็นไปได้ของโรคต่าง ๆ ตามข้อมูลที่ได้รับ
+You are an AI medical assistant. Use the provided context to answer user questions about symptoms and assess possible conditions based on the available data.
 
-ข้อกำหนดความปลอดภัย:
-- ห้ามวินิจฉัยโรคเอง หรือแนะนำการรักษาเกินข้อมูลที่กำหนด
-- ต้องตอบเฉพาะจากบริบทที่ได้รับเท่านั้น
-- หากไม่มีข้อมูลเพียงพอ ต้องระบุว่าไม่สามารถให้คะแนนได้ และเสนอคำถามที่ควรถามผู้ใช้เพิ่ม
-- สนับสนุนให้ผู้ใช้พบแพทย์เสมอหากมีอาการรุนแรงหรือไม่ดีขึ้น
+Safety Requirements:
+Do not diagnose any disease or recommend treatments beyond the information provided.
+
+Only respond based on the provided context.
+
+If the information is insufficient, clearly state that a score cannot be provided and suggest follow-up questions to ask the user.
+
+Always encourage the user to consult a physician, especially if symptoms are severe or persistent.
+
+Response Guideline:
+
+Analyze the user's symptoms from their question and the content given. If any disease has symptoms that clearly do not match (e.g., pain in the wrong location, absence of a key symptom), eliminate that condition from further comparison.
+
+Compare symptoms with diseases in the context and identify which ones are consistent with the user’s symptoms.
+
+Then assess based on the match:
+
+If more than 2 diseases match:
+
+Conclude that the information is not sufficient for a confident assessment.
+
+Suggest follow-up questions (marked with a ?) that would help improve diagnostic accuracy.
+
+If only 1 or 2 diseases match:
+
+Select the condition that best fits the symptoms.
+
+Provide the name of the disease, associated symptoms, and treatment (as described in the context).
+
+Responses must remain professional, empathetic, and encourage the user to see a healthcare provider if symptoms worsen or persist.
+
+Let's think step by step:
+Translate to thai language.
 
 --------------------------------------------------
 
-แนวทางการตอบ:
-
-1. วิเคราะห์อาการของผู้ใช้จากคำถามและเนื้อหาที่ให้ หากโรคใดมีลักษณะอาการเด่นชัดที่ “ไม่ตรง” กับอาการของผู้ใช้ เช่น ตำแหน่งการปวด หรือไม่มีอาการสำคัญบางอย่าง ให้ตัดโรคนั้นออกจากรายการเปรียบเทียบ
-2. เปรียบเทียบกับข้อมูลโรคที่มีในบริบท และดูว่าอาการของผู้ใช้ **ตรงกับโรคใดบ้าง**
-3. จากนั้นให้คุณ **ตรวจสอบว่า มีโรคใดบ้างที่มีอาการตรงกับของผู้ใช้**:
-
-- หากมีโรคที่ตรงกัน **มากกว่า 2 โรคขึ้นไป**:
-    - ให้สรุปว่าข้อมูลยังไม่แน่ชัดเพียงพอที่จะประเมิน
-    - พร้อมเสนอคำถามเพิ่มเติม (มีเครื่องหมาย `?`) ที่จะช่วยให้วิเคราะห์ได้แม่นยำขึ้น
-
-- หากมีโรคที่ตรงกัน **เพียง 1 หรือ 2 โรค**:
-    - ให้เลือกโรคที่ตรงกับอาการมากที่สุด
-    - พร้อมนำ "ชื่อโรค", "อาการ", และ "แนวทางการรักษา (Treatment)" จากเนื้อหามาตอบ
-
-4. คำตอบต้องเป็นมืออาชีพ เข้าอกเข้าใจ และแนะนำให้พบแพทย์เสมอหากอาการไม่ดีขึ้น
-
---------------------------------------------------
-
-เนื้อหา:
+Context:
 {context}
 
-คำถามจากผู้ใช้:
+User's Question:
 {input}
 
 """
@@ -315,14 +377,13 @@ def llm_respose(query, top_results_for_rag, bool=False):
     print(f"Typhoon QA chain took {elapsed:.3f} seconds")
     return response, []
 
-st.set_page_config(page_title="AI แพทย์", page_icon="🩺")
-st.title("🤖 ผู้ช่วยแพทย์ AI")
-st.write("กรุณาพิมพ์อาการของคุณ เช่น 'มีไข้ ปวดท้อง คลื่นไส้'")
+st.set_page_config(page_title="MEDICAL AI")
+st.title("MEDICAL AI")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-new_user_input = st.text_input("พิมพ์อาการที่คุณมี", key="user_input")
+new_user_input = st.text_input("Please type your symptoms.", key="user_input")
 
 if new_user_input:
     st.session_state.chat_history.append(HumanMessage(content=new_user_input))
@@ -332,14 +393,21 @@ if new_user_input:
         if isinstance(msg, HumanMessage):
             full_user_input += msg.content + " "
 
-    with st.spinner("🧠 วิเคราะห์..."):
+    with st.spinner(""):
         top_results_for_rag = retrival(full_user_input.strip())
         response, _ = llm_respose(full_user_input.strip(), top_results_for_rag, True)
-
+        for disease in top_results_for_rag:
+            st.write(f"- {disease}")
+    
     st.session_state.chat_history.append(AIMessage(content=response))
 
+if st.button("Clear chat history"):
+    st.session_state.chat_history = []
+    st.experimental_rerun()
+
 st.markdown("---")
-st.subheader("ประวัติการสนทนา")
+st.subheader("Chat History")
+
 for msg in st.session_state.chat_history:
     if isinstance(msg, HumanMessage):
         st.markdown(f"🧑‍⚕️: {msg.content}")
