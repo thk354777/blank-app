@@ -289,7 +289,7 @@ llm = ChatOpenAI(
     model_name="typhoon-v2-70b-instruct", #"typhoon-v2.1-12b-instruct", "typhoon-v2-70b-instruct"
     temperature=0.9,
     max_tokens=512, # Total Context Window 8k เป็น token input + token output แล้ว
-    openai_api_key="sk-cB5S8H0J5o0QBid2QmJ73GjQJAfF0EN3Rm8AgoYJkZLZsUG2",
+    openai_api_key=os.environ["OPENAI_API_KEY"],
     openai_api_base="https://api.opentyphoon.ai/v1",
 )
 
